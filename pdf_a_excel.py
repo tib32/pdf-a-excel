@@ -19,10 +19,14 @@ Uso:
 """
 
 import argparse
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+from openpyxl.styles import Alignment, Font, numbers
+from openpyxl.utils import get_column_letter
 
 # ---------- Verificación de dependencias ----------
 _dependencias_faltantes = []
@@ -303,20 +307,167 @@ def extraer_texto(pdf_path: str, args: argparse.Namespace) -> pd.DataFrame:
 
 
 # =====================================================================
+# Auto-detección y conversión de tipos
+# =====================================================================
+_PATRON_FECHA = re.compile(
+    r'^\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}$'
+)
+_FORMATOS_FECHA = [
+    "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y",
+    "%d/%m/%y", "%m/%d/%y", "%d-%m-%y", "%m-%d-%y",
+    "%Y-%m-%d", "%Y/%m/%d",
+]
+
+
+def _parsear_fecha(val: str) -> datetime | None:
+    """Intenta parsear una cadena como fecha."""
+    val = val.strip()
+    if not _PATRON_FECHA.match(val):
+        return None
+    for fmt in _FORMATOS_FECHA:
+        try:
+            return datetime.strptime(val, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _parsear_numero(val: str) -> float | None:
+    """Intenta parsear una cadena como número (soporta comas como miles)."""
+    val = val.strip()
+    if not val:
+        return None
+    # Quitar espacios internos
+    val = val.replace(" ", "")
+    # Detectar formato: 1,234.56 o 1.234,56 o simples
+    # Formato americano: comas como miles, punto decimal
+    if re.match(r'^-?[\d,]+\.\d+$', val):
+        try:
+            return float(val.replace(",", ""))
+        except ValueError:
+            return None
+    # Formato europeo: puntos como miles, coma decimal
+    if re.match(r'^-?[\d.]+,\d+$', val):
+        try:
+            return float(val.replace(".", "").replace(",", "."))
+        except ValueError:
+            return None
+    # Número entero con comas como miles: 140,000
+    if re.match(r'^-?[\d,]+$', val) and "," in val:
+        try:
+            return float(val.replace(",", ""))
+        except ValueError:
+            return None
+    # Número simple
+    if re.match(r'^-?\d+\.?\d*$', val):
+        try:
+            return float(val)
+        except ValueError:
+            return None
+    return None
+
+
+def auto_convertir_tipos(df: pd.DataFrame) -> pd.DataFrame:
+    """Convierte columnas de texto a número o fecha cuando corresponde."""
+    df = df.copy()
+    for col in df.columns:
+        if df[col].dtype != object:
+            continue
+
+        # Tomar muestra de valores no vacíos
+        muestra = df[col].dropna()
+        muestra = muestra[muestra.astype(str).str.strip() != ""]
+        if muestra.empty:
+            continue
+
+        # --- Intentar fechas ---
+        fechas = muestra.astype(str).apply(_parsear_fecha)
+        ratio_fechas = fechas.notna().sum() / len(muestra) if len(muestra) > 0 else 0
+        if ratio_fechas >= 0.6 and fechas.notna().sum() >= 1:
+            df[col] = df[col].astype(str).apply(
+                lambda x: _parsear_fecha(x) if pd.notna(x) and str(x).strip() else None
+            )
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+            continue
+
+        # --- Intentar números ---
+        nums = muestra.astype(str).apply(_parsear_numero)
+        ratio_nums = nums.notna().sum() / len(muestra) if len(muestra) > 0 else 0
+        if ratio_nums >= 0.6 and nums.notna().sum() >= 1:
+            df[col] = df[col].astype(str).apply(
+                lambda x: _parsear_numero(x) if pd.notna(x) and str(x).strip() else None
+            )
+            continue
+
+    return df
+
+
+# =====================================================================
+# Aplicar formatos al Excel
+# =====================================================================
+def _aplicar_formatos_hoja(ws):
+    """Aplica formato numérico, fecha y ancho de columna a una hoja."""
+    # Formato encabezado
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    # Detectar tipos por columna y aplicar formato
+    for col_idx in range(1, ws.max_column + 1):
+        max_ancho = len(str(ws.cell(1, col_idx).value or ""))
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row_idx, col_idx)
+            val = cell.value
+            if val is None:
+                continue
+
+            # Fecha (datetime)
+            if isinstance(val, datetime):
+                cell.number_format = "DD/MM/YYYY"
+                cell.alignment = Alignment(horizontal="center")
+                max_ancho = max(max_ancho, 12)
+            # Número
+            elif isinstance(val, (int, float)):
+                if val == int(val) and abs(val) < 1e15:
+                    cell.number_format = '#,##0'
+                else:
+                    cell.number_format = '#,##0.00'
+                cell.alignment = Alignment(horizontal="right")
+                max_ancho = max(max_ancho, len(f"{val:,.2f}"))
+            # Texto
+            else:
+                max_ancho = max(max_ancho, min(len(str(val)), 50))
+
+        # Auto-ancho (con un máximo de 55)
+        ancho = min(max_ancho + 3, 55)
+        ws.column_dimensions[get_column_letter(col_idx)].width = ancho
+
+
+# =====================================================================
 # Guardar en Excel
 # =====================================================================
 def guardar_tablas_excel(tablas: list[pd.DataFrame], ruta: str, separar_hojas: bool):
+    # Convertir tipos en cada tabla
+    tablas = [auto_convertir_tipos(t) for t in tablas]
+
     with pd.ExcelWriter(ruta, engine="openpyxl") as w:
         if separar_hojas:
             for i, df in enumerate(tablas, 1):
-                nombre = f"Tabla_{i}"[:31]  # Excel limita a 31 chars
+                nombre = f"Tabla_{i}"[:31]
                 df.to_excel(w, sheet_name=nombre, index=False)
         else:
             pd.concat(tablas, ignore_index=True).to_excel(w, sheet_name="Datos", index=False)
 
+        # Aplicar formatos a cada hoja
+        for ws in w.book.worksheets:
+            _aplicar_formatos_hoja(ws)
+
 
 def guardar_texto_excel(df: pd.DataFrame, ruta: str):
-    df.to_excel(ruta, index=False, sheet_name="Texto", engine="openpyxl")
+    df = auto_convertir_tipos(df)
+    with pd.ExcelWriter(ruta, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="Texto")
+        _aplicar_formatos_hoja(w.book["Texto"])
 
 
 # =====================================================================

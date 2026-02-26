@@ -368,7 +368,7 @@ def _parsear_numero(val: str) -> float | None:
 
 
 def auto_convertir_tipos(df: pd.DataFrame) -> pd.DataFrame:
-    """Convierte columnas de texto a número o fecha cuando corresponde."""
+    """Convierte columnas de texto a número o fecha cuando la mayoría lo son."""
     df = df.copy()
     for col in df.columns:
         if df[col].dtype != object:
@@ -380,7 +380,7 @@ def auto_convertir_tipos(df: pd.DataFrame) -> pd.DataFrame:
         if muestra.empty:
             continue
 
-        # --- Intentar fechas ---
+        # --- Intentar fechas (solo si mayoría son fechas) ---
         fechas = muestra.astype(str).apply(_parsear_fecha)
         ratio_fechas = fechas.notna().sum() / len(muestra) if len(muestra) > 0 else 0
         if ratio_fechas >= 0.6 and fechas.notna().sum() >= 1:
@@ -390,7 +390,7 @@ def auto_convertir_tipos(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_datetime(df[col], errors="coerce")
             continue
 
-        # --- Intentar números ---
+        # --- Intentar números (solo si mayoría son números) ---
         nums = muestra.astype(str).apply(_parsear_numero)
         ratio_nums = nums.notna().sum() / len(muestra) if len(muestra) > 0 else 0
         if ratio_nums >= 0.6 and nums.notna().sum() >= 1:
@@ -406,7 +406,8 @@ def auto_convertir_tipos(df: pd.DataFrame) -> pd.DataFrame:
 # Aplicar formatos al Excel
 # =====================================================================
 def _aplicar_formatos_hoja(ws):
-    """Aplica formato numérico, fecha y ancho de columna a una hoja."""
+    """Aplica formato numérico, fecha y ancho de columna a una hoja.
+    Convierte celda por celda los strings que son números o fechas."""
     # Formato encabezado
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -421,20 +422,34 @@ def _aplicar_formatos_hoja(ws):
             if val is None:
                 continue
 
-            # Fecha (datetime)
+            # --- Si es string, intentar convertir celda por celda ---
+            if isinstance(val, str):
+                s = val.strip()
+                if s:
+                    # Intentar fecha
+                    fecha = _parsear_fecha(s)
+                    if fecha is not None:
+                        cell.value = fecha
+                        val = fecha
+                    else:
+                        # Intentar número
+                        num = _parsear_numero(s)
+                        if num is not None:
+                            cell.value = num
+                            val = num
+
+            # --- Aplicar formato según tipo final ---
             if isinstance(val, datetime):
                 cell.number_format = "DD/MM/YYYY"
                 cell.alignment = Alignment(horizontal="center")
                 max_ancho = max(max_ancho, 12)
-            # Número
             elif isinstance(val, (int, float)):
-                if val == int(val) and abs(val) < 1e15:
-                    cell.number_format = '#,##0'
-                else:
+                if isinstance(val, float) and val != int(val):
                     cell.number_format = '#,##0.00'
+                else:
+                    cell.number_format = '#,##0'
                 cell.alignment = Alignment(horizontal="right")
                 max_ancho = max(max_ancho, len(f"{val:,.2f}"))
-            # Texto
             else:
                 max_ancho = max(max_ancho, min(len(str(val)), 50))
 

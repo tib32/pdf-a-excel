@@ -21,6 +21,7 @@ Uso:
 import argparse
 import re
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -459,6 +460,85 @@ def _aplicar_formatos_hoja(ws):
 
 
 # =====================================================================
+# Normalizar y apilar tablas verticalmente
+# =====================================================================
+def _normalizar_tabla(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza una tabla para apilado vertical:
+    - Si los nombres de columna contienen datos reales (no 'Unnamed'),
+      los rescata como primera fila.
+    - Renombra todas las columnas a Col_1, Col_2, etc.
+    """
+    df = df.copy()
+
+    # Detectar si los encabezados contienen datos reales
+    nombres_orig = list(df.columns)
+    tiene_datos_en_header = False
+    for nombre in nombres_orig:
+        s = str(nombre).strip()
+        # Si no es "Unnamed: X" y no es un encabezado genérico vacío
+        if not s.startswith("Unnamed:") and s != "":
+            # Si parece una fecha, número o texto significativo → es dato
+            if (_parsear_fecha(s) is not None or
+                _parsear_numero(s) is not None or
+                len(s) > 2):
+                tiene_datos_en_header = True
+                break
+
+    if tiene_datos_en_header:
+        # Insertar los encabezados originales como primera fila de datos
+        fila_header = {}
+        for i, nombre in enumerate(nombres_orig):
+            s = str(nombre).strip()
+            if s.startswith("Unnamed:"):
+                fila_header[nombre] = None
+            else:
+                fila_header[nombre] = s
+        header_df = pd.DataFrame([fila_header])
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            df = pd.concat([header_df, df], ignore_index=True)
+
+    # Renombrar columnas a genéricas
+    n_cols = len(df.columns)
+    df.columns = [f"Col_{i+1}" for i in range(n_cols)]
+
+    return df
+
+
+def _apilar_tablas(tablas: list[pd.DataFrame]) -> pd.DataFrame:
+    """Apila múltiples tablas verticalmente, normalizando columnas.
+    Todas las tablas se ajustan al mismo número de columnas."""
+    if not tablas:
+        return pd.DataFrame()
+
+    # Normalizar cada tabla
+    normalizadas = [_normalizar_tabla(t) for t in tablas]
+
+    # Encontrar máximo de columnas
+    max_cols = max(len(t.columns) for t in normalizadas)
+
+    # Ajustar todas al mismo ancho
+    ajustadas = []
+    for df in normalizadas:
+        n = len(df.columns)
+        if n < max_cols:
+            for i in range(n, max_cols):
+                df[f"Col_{i+1}"] = None
+        ajustadas.append(df)
+
+    # Apilar verticalmente
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=FutureWarning)
+        resultado = pd.concat(ajustadas, ignore_index=True)
+
+    # Eliminar columnas completamente vacías y re-numerar
+    resultado = resultado.dropna(axis=1, how="all")
+    resultado.columns = [f"Col_{i+1}" for i in range(len(resultado.columns))]
+
+    return resultado
+
+
+# =====================================================================
 # Guardar en Excel
 # =====================================================================
 def guardar_tablas_excel(tablas: list[pd.DataFrame], ruta: str, separar_hojas: bool):
@@ -471,7 +551,8 @@ def guardar_tablas_excel(tablas: list[pd.DataFrame], ruta: str, separar_hojas: b
                 nombre = f"Tabla_{i}"[:31]
                 df.to_excel(w, sheet_name=nombre, index=False)
         else:
-            pd.concat(tablas, ignore_index=True).to_excel(w, sheet_name="Datos", index=False)
+            df_apilado = _apilar_tablas(tablas)
+            df_apilado.to_excel(w, sheet_name="Datos", index=False)
 
         # Aplicar formatos a cada hoja
         for ws in w.book.worksheets:

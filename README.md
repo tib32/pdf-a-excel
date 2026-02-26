@@ -1,6 +1,6 @@
 # PDF a Excel
 
-Convierte archivos PDF a Excel (.xlsx) desde la línea de comandos. Auto-detecta tablas y texto, con soporte batch.
+Convierte archivos PDF a Excel (.xlsx) desde la línea de comandos. Auto-detecta tablas y texto, con soporte batch y **formateo automático de tipos** (números, fechas, texto).
 
 ## Requisitos
 
@@ -85,8 +85,26 @@ python pdf_a_excel.py grande.pdf --paginas 1-5
 2. **Modo tablas**: fuerza extracción de tablas (tabula → pdfplumber como fallback).
 3. **Modo texto**: extrae texto directamente con `pdfplumber`.
 
+## Formateo automático
+
+El script detecta y convierte automáticamente el tipo de cada celda al exportar a Excel:
+
+| Tipo | Detección | Formato en Excel |
+|---|---|---|
+| **Números** | `1,750.00`, `140,000`, `80.00`, `-13,603.56` | `#,##0` o `#,##0.00`, alineados a la derecha |
+| **Fechas** | `17/02/2026`, `2026-02-17`, `17-02-26` | `DD/MM/YYYY`, centradas |
+| **Texto** | Todo lo demás | Sin formato especial |
+
+Además aplica:
+- **Encabezados** en negrita y centrados
+- **Ancho de columnas** auto-ajustado al contenido
+- **Todo en una sola hoja** por defecto (usar `--separar-hojas` para dividir)
+
+La conversión opera **celda por celda**, por lo que funciona incluso en columnas mixtas donde conviven texto y números.
+
 ## Notas
 
 - `tabula-py` requiere Java y es ideal para PDFs con tablas bien definidas.
 - `pdfplumber` no requiere Java y sirve como fallback para tablas y para extracción de texto.
+- Si un PDF individual falla en modo batch, se reporta el error y se continúa con el siguiente.
 - Para PDFs escaneados (imágenes) se necesitaría OCR adicional (no incluido).

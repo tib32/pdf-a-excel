@@ -55,7 +55,7 @@ python pdf_a_excel.py doc.pdf -v
 | `--lattice` | Tablas con bordes visibles |
 | `--stream` | Tablas sin bordes (por espacios) |
 | `--multiple-tablas` | Detectar múltiples tablas por página |
-| `--una-hoja` | Concatenar todo en una sola hoja |
+| `--separar-hojas` | Guardar cada tabla en una hoja separada (default: todo en una) |
 | `--separador` | Separador para dividir texto en columnas |
 | `--sin-vacias` | Omitir líneas vacías |
 | `--modo-texto` | `linea` o `pagina` (default: `linea`) |

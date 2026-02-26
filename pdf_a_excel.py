@@ -124,10 +124,10 @@ def parsear_argumentos() -> argparse.Namespace:
         help="Detectar múltiples tablas por página.",
     )
     grupo_tablas.add_argument(
-        "--una-hoja",
+        "--separar-hojas",
         action="store_true",
         default=False,
-        help="Concatenar todas las tablas en una sola hoja.",
+        help="Guardar cada tabla en una hoja separada (por defecto todo va en una sola hoja).",
     )
 
     # --- Opciones de texto ---
@@ -305,14 +305,14 @@ def extraer_texto(pdf_path: str, args: argparse.Namespace) -> pd.DataFrame:
 # =====================================================================
 # Guardar en Excel
 # =====================================================================
-def guardar_tablas_excel(tablas: list[pd.DataFrame], ruta: str, una_hoja: bool):
+def guardar_tablas_excel(tablas: list[pd.DataFrame], ruta: str, separar_hojas: bool):
     with pd.ExcelWriter(ruta, engine="openpyxl") as w:
-        if una_hoja:
-            pd.concat(tablas, ignore_index=True).to_excel(w, sheet_name="Datos", index=False)
-        else:
+        if separar_hojas:
             for i, df in enumerate(tablas, 1):
                 nombre = f"Tabla_{i}"[:31]  # Excel limita a 31 chars
                 df.to_excel(w, sheet_name=nombre, index=False)
+        else:
+            pd.concat(tablas, ignore_index=True).to_excel(w, sheet_name="Datos", index=False)
 
 
 def guardar_texto_excel(df: pd.DataFrame, ruta: str):
@@ -340,7 +340,7 @@ def procesar_pdf(pdf_path: str, ruta_salida: str, args: argparse.Namespace):
             tablas = extraer_tablas_pdfplumber(pdf_path, args)
 
         if tablas:
-            guardar_tablas_excel(tablas, ruta_salida, args.una_hoja)
+            guardar_tablas_excel(tablas, ruta_salida, args.separar_hojas)
             total_filas = sum(len(t) for t in tablas)
             print(f"  OK: {len(tablas)} tabla(s), {total_filas} filas -> {ruta_salida}")
             return
